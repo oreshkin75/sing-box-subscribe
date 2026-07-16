@@ -3,7 +3,6 @@ package main
 import "testing"
 
 func TestGenerationFlags(t *testing.T) {
-	t.Setenv("SUBSCRIPTION_URL", "https://example.com/subscription")
 	t.Setenv("GENERATE_URLTEST", "true")
 	t.Setenv("GENERATE_SELECTOR", "true")
 
@@ -17,9 +16,15 @@ func TestGenerationFlags(t *testing.T) {
 }
 
 func TestInvalidGenerationFlag(t *testing.T) {
-	t.Setenv("SUBSCRIPTION_URL", "https://example.com/subscription")
 	t.Setenv("GENERATE_URLTEST", "sometimes")
 	if _, err := loadConfig(); err == nil {
 		t.Fatal("expected invalid boolean error")
+	}
+}
+
+func TestSubscriptionURLIsNotRequiredAtStartup(t *testing.T) {
+	t.Setenv("SUBSCRIPTION_URL", "")
+	if _, err := loadConfig(); err != nil {
+		t.Fatalf("loadConfig() returned an error without SUBSCRIPTION_URL: %v", err)
 	}
 }

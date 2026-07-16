@@ -5,7 +5,7 @@
 
 [English version](README.md)
 
-Небольшой HTTP-сервис, который загружает plain-text подписку, преобразует proxy URI в outbounds sing-box и отдаёт JSON по HTTP.
+Небольшой HTTP-сервис, который получает URL plain-text подписки в запросе, загружает её, преобразует proxy URI в outbounds sing-box и возвращает готовый JSON.
 
 Если тег outbound начинается с двухбуквенного кода страны в верхнем регистре, сервис добавляет перед ним соответствующий флаг. Например, `US-SLC` превращается в `🇺🇸 US-SLC`; для `UK` корректно используется флаг с региональным кодом `GB` (`🇬🇧`).
 
@@ -22,26 +22,28 @@
 Требуется Go 1.26.5 или новее.
 
 ```sh
-export SUBSCRIPTION_URL='https://example.com/path/to/plain/config/'
 go run .
 ```
 
-Либо через файл `.env` (шаблон — [`.env.example`](.env.example)):
+Все параметры запуска опциональны. Для их настройки через файл `.env` используйте шаблон [`.env.example`](.env.example):
 
 ```sh
 cp .env.example .env
-# Отредактируйте SUBSCRIPTION_URL в .env.
 set -a
 . ./.env
 set +a
 go run .
 ```
 
-После запуска результат доступен по адресу:
+После запуска передайте ссылку на подписку в обязательном query-параметре `url`:
 
-```text
-http://localhost:8080/outbounds.json
+```sh
+curl --get \
+  --data-urlencode 'url=https://example.com/path/to/plain/config/' \
+  http://localhost:8080/outbounds.json
 ```
+
+Рекомендуется использовать `--data-urlencode`, поскольку ссылки на подписки часто содержат токены и собственные query-параметры. Отсутствующий, повторяющийся, некорректный или не HTTP(S) параметр `url` возвращает HTTP 400. Ошибка загрузки или преобразования подписки возвращает HTTP 502.
 
 Ответ имеет вид:
 
@@ -67,16 +69,18 @@ http://localhost:8080/outbounds.json
 
 | Переменная | Обязательна | Значение по умолчанию | Описание |
 |---|---:|---|---|
-| `SUBSCRIPTION_URL` | да | — | URL исходной plain-text подписки |
 | `LISTEN_ADDR` | нет | `:8080` | Адрес HTTP-сервера |
 | `OUTPUT_PATH` | нет | `/outbounds.json` | Путь выдачи JSON |
 | `FETCH_TIMEOUT` | нет | `15s` | Тайм-аут загрузки подписки |
-| `CACHE_TTL` | нет | `5m` | Время хранения результата; `0s` отключает свежий кэш |
+| `CACHE_TTL` | нет | `5m` | Время хранения результата отдельно для каждой подписки; `0s` отключает свежий кэш |
 | `MAX_SUBSCRIPTION_BYTES` | нет | `8388608` | Максимальный размер ответа upstream |
 | `GENERATE_URLTEST` | нет | `false` | Генерировать группы `urltest` для каждой страны и каждого протокола |
 | `GENERATE_SELECTOR` | нет | `false` | Генерировать группы `selector` для каждой страны и каждого протокола |
 
-Проверка живости доступна на `/healthz`. Если обновление upstream не удалось, но в памяти есть предыдущая версия, сервис отдаёт её с HTTP-заголовком `Warning`.
+Проверка живости доступна на `/healthz`. Результаты кэшируются отдельно для каждой ссылки; в памяти хранится не более 128 подписок. Если обновление upstream не удалось, но для этой ссылки есть предыдущая версия, сервис отдаёт её с HTTP-заголовком `Warning`.
+
+> [!WARNING]
+> Сервис загружает URL, переданные клиентами. Не публикуйте его в недоверенной сети без аутентификации или ограничения доступа на сетевом уровне.
 
 ### Генерируемые группы
 
@@ -105,16 +109,13 @@ docker run --rm -p 8080:8080 \
 Минимальный запуск без файла `.env`:
 
 ```sh
-docker run --rm -p 8080:8080 \
-  -e 'SUBSCRIPTION_URL=https://example.com/path/to/plain/config/' \
-  sing-box-subscribe
+docker run --rm -p 8080:8080 sing-box-subscribe
 ```
 
 Запуск с обоими типами генерируемых групп:
 
 ```sh
 docker run --rm -p 8080:8080 \
-  -e 'SUBSCRIPTION_URL=https://example.com/path/to/plain/config/' \
   -e 'GENERATE_URLTEST=true' \
   -e 'GENERATE_SELECTOR=true' \
   sing-box-subscribe
@@ -124,7 +125,10 @@ docker run --rm -p 8080:8080 \
 
 ```sh
 go test ./...
-curl http://localhost:8080/outbounds.json
+curl --fail --show-error --get \
+  --data-urlencode 'url=https://example.com/path/to/plain/config/' \
+  -o outbounds.json \
+  http://localhost:8080/outbounds.json
 ```
 
 Некорректные и неподдерживаемые строки пропускаются и выводятся в лог. Если валидных поддерживаемых ссылок нет, клиент получает HTTP 502.

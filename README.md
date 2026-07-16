@@ -5,7 +5,7 @@
 
 [Русская версия](README_RU.md)
 
-A small HTTP service that downloads a plain-text proxy subscription, converts its proxy URIs into sing-box outbounds, and serves the resulting JSON over HTTP.
+A small HTTP service that downloads a plain-text proxy subscription whose URL is supplied in the request, converts its proxy URIs into sing-box outbounds, and returns the resulting JSON.
 
 When an outbound tag starts with an uppercase two-letter country code, the service prefixes it with the corresponding flag. For example, `US-SLC` becomes `🇺🇸 US-SLC`; `UK` is correctly mapped to the `GB` flag (`🇬🇧`).
 
@@ -22,26 +22,28 @@ Supported URI schemes:
 Go 1.26.5 or newer is required.
 
 ```sh
-export SUBSCRIPTION_URL='https://example.com/path/to/plain/config/'
 go run .
 ```
 
-Alternatively, use an `.env` file based on [`.env.example`](.env.example):
+All startup settings are optional. To configure them with an `.env` file, use [`.env.example`](.env.example):
 
 ```sh
 cp .env.example .env
-# Edit SUBSCRIPTION_URL in .env.
 set -a
 . ./.env
 set +a
 go run .
 ```
 
-Once the service is running, the generated configuration is available at:
+Once the service is running, pass the subscription URL in the required `url` query parameter:
 
-```text
-http://localhost:8080/outbounds.json
+```sh
+curl --get \
+  --data-urlencode 'url=https://example.com/path/to/plain/config/' \
+  http://localhost:8080/outbounds.json
 ```
+
+`--data-urlencode` is recommended because subscription URLs often contain tokens and their own query parameters. A missing, repeated, malformed, or non-HTTP(S) `url` parameter returns HTTP 400. An upstream download or conversion failure returns HTTP 502.
 
 Example response:
 
@@ -67,16 +69,18 @@ Example response:
 
 | Variable | Required | Default | Description |
 |---|---:|---|---|
-| `SUBSCRIPTION_URL` | yes | — | URL of the source plain-text subscription |
 | `LISTEN_ADDR` | no | `:8080` | HTTP server listen address |
 | `OUTPUT_PATH` | no | `/outbounds.json` | Path serving the generated JSON |
 | `FETCH_TIMEOUT` | no | `15s` | Subscription download timeout |
-| `CACHE_TTL` | no | `5m` | Generated result cache duration; use `0s` to disable the fresh cache |
+| `CACHE_TTL` | no | `5m` | Per-subscription generated result cache duration; use `0s` to disable the fresh cache |
 | `MAX_SUBSCRIPTION_BYTES` | no | `8388608` | Maximum allowed upstream response size |
 | `GENERATE_URLTEST` | no | `false` | Generate `urltest` groups for every country and protocol |
 | `GENERATE_SELECTOR` | no | `false` | Generate `selector` groups for every country and protocol |
 
-A health check is available at `/healthz`. If an upstream refresh fails after a result has been cached, the service returns the stale result with an HTTP `Warning` header.
+A health check is available at `/healthz`. Results are cached separately for each subscription URL, with at most 128 subscriptions kept in memory. If an upstream refresh fails after a result has been cached, the service returns the stale result for that URL with an HTTP `Warning` header.
+
+> [!WARNING]
+> The service fetches URLs supplied by clients. Do not expose it to untrusted networks without authentication or network-level access controls.
 
 ### Generated groups
 
@@ -105,16 +109,13 @@ docker run --rm -p 8080:8080 \
 Minimal run without an `.env` file:
 
 ```sh
-docker run --rm -p 8080:8080 \
-  -e 'SUBSCRIPTION_URL=https://example.com/path/to/plain/config/' \
-  sing-box-subscribe
+docker run --rm -p 8080:8080 sing-box-subscribe
 ```
 
 Run with both generated group types enabled:
 
 ```sh
 docker run --rm -p 8080:8080 \
-  -e 'SUBSCRIPTION_URL=https://example.com/path/to/plain/config/' \
   -e 'GENERATE_URLTEST=true' \
   -e 'GENERATE_SELECTOR=true' \
   sing-box-subscribe
@@ -124,7 +125,10 @@ docker run --rm -p 8080:8080 \
 
 ```sh
 go test ./...
-curl http://localhost:8080/outbounds.json
+curl --fail --show-error --get \
+  --data-urlencode 'url=https://example.com/path/to/plain/config/' \
+  -o outbounds.json \
+  http://localhost:8080/outbounds.json
 ```
 
 Malformed and unsupported subscription entries are skipped and written to the log. If the subscription contains no valid supported links, the client receives HTTP 502.

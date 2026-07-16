@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,16 +19,27 @@ type subscriptionService struct {
 	client *http.Client
 	logger *slog.Logger
 
-	mu        sync.Mutex
-	cached    []byte
-	expiresAt time.Time
+	mu    sync.Mutex
+	cache map[string]cacheEntry
 }
+
+type cacheEntry struct {
+	data       []byte
+	expiresAt  time.Time
+	lastAccess time.Time
+}
+
+const (
+	maxCachedSubscriptions  = 128
+	maxSubscriptionURLBytes = 8192
+)
 
 func newSubscriptionService(cfg config, logger *slog.Logger) *subscriptionService {
 	return &subscriptionService{
 		config: cfg,
 		client: &http.Client{Timeout: cfg.FetchTimeout},
 		logger: logger,
+		cache:  make(map[string]cacheEntry),
 	}
 }
 
@@ -49,7 +61,13 @@ func (s *subscriptionService) handleOutbounds(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	data, stale, err := s.get(r.Context())
+	subscriptionURL, err := subscriptionURLFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	data, stale, err := s.get(r.Context(), subscriptionURL)
 	if err != nil {
 		s.logger.Error("cannot build outbounds", "error", err)
 		http.Error(w, "cannot load subscription", http.StatusBadGateway)
@@ -67,30 +85,46 @@ func (s *subscriptionService) handleOutbounds(w http.ResponseWriter, r *http.Req
 	}
 }
 
-func (s *subscriptionService) get(ctx context.Context) ([]byte, bool, error) {
+func (s *subscriptionService) get(ctx context.Context, subscriptionURL string) ([]byte, bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	now := time.Now()
-	if s.cached != nil && now.Before(s.expiresAt) {
-		return s.cached, false, nil
+	entry, cached := s.cache[subscriptionURL]
+	if cached && now.Before(entry.expiresAt) {
+		entry.lastAccess = now
+		s.cache[subscriptionURL] = entry
+		s.mu.Unlock()
+		return entry.data, false, nil
 	}
+	s.mu.Unlock()
 
-	data, err := s.fetchAndConvert(ctx)
+	data, err := s.fetchAndConvert(ctx, subscriptionURL)
 	if err != nil {
-		if s.cached != nil {
+		s.mu.Lock()
+		entry, cached = s.cache[subscriptionURL]
+		if cached {
+			entry.lastAccess = time.Now()
+			s.cache[subscriptionURL] = entry
+			s.mu.Unlock()
 			s.logger.Warn("subscription refresh failed; returning stale cache", "error", err)
-			return s.cached, true, nil
+			return entry.data, true, nil
 		}
+		s.mu.Unlock()
 		return nil, false, err
 	}
-	s.cached = data
-	s.expiresAt = now.Add(s.config.CacheTTL)
+
+	s.mu.Lock()
+	s.evictOldestCacheEntry(subscriptionURL)
+	s.cache[subscriptionURL] = cacheEntry{
+		data:       data,
+		expiresAt:  time.Now().Add(s.config.CacheTTL),
+		lastAccess: time.Now(),
+	}
+	s.mu.Unlock()
 	return data, false, nil
 }
 
-func (s *subscriptionService) fetchAndConvert(ctx context.Context) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.config.SubscriptionURL, nil)
+func (s *subscriptionService) fetchAndConvert(ctx context.Context, subscriptionURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, subscriptionURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create upstream request: %w", err)
 	}
@@ -133,4 +167,39 @@ func (s *subscriptionService) fetchAndConvert(ctx context.Context) ([]byte, erro
 		return nil, fmt.Errorf("encode outbounds JSON: %w", err)
 	}
 	return append(data, '\n'), nil
+}
+
+func subscriptionURLFromRequest(r *http.Request) (string, error) {
+	values, exists := r.URL.Query()["url"]
+	if !exists || len(values) == 0 || strings.TrimSpace(values[0]) == "" {
+		return "", errors.New("missing required url query parameter")
+	}
+	if len(values) != 1 {
+		return "", errors.New("url query parameter must be specified once")
+	}
+	rawURL := strings.TrimSpace(values[0])
+	if len(rawURL) > maxSubscriptionURLBytes {
+		return "", errors.New("subscription URL is too long")
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", errors.New("url must be a valid http(s) subscription URL")
+	}
+	parsed.Fragment = ""
+	return parsed.String(), nil
+}
+
+func (s *subscriptionService) evictOldestCacheEntry(incomingURL string) {
+	if _, exists := s.cache[incomingURL]; exists || len(s.cache) < maxCachedSubscriptions {
+		return
+	}
+	var oldestURL string
+	var oldestAccess time.Time
+	for cachedURL, entry := range s.cache {
+		if oldestURL == "" || entry.lastAccess.Before(oldestAccess) {
+			oldestURL = cachedURL
+			oldestAccess = entry.lastAccess
+		}
+	}
+	delete(s.cache, oldestURL)
 }
