@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -20,14 +21,16 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 
 func TestOutboundsHandler(t *testing.T) {
 	cfg := config{
-		SubscriptionURL: "https://subscription.example/config",
-		OutputPath:      "/outbounds.json",
-		FetchTimeout:    time.Second,
-		CacheTTL:        time.Minute,
-		MaxBodyBytes:    1 << 20,
+		OutputPath:   "/outbounds.json",
+		FetchTimeout: time.Second,
+		CacheTTL:     time.Minute,
+		MaxBodyBytes: 1 << 20,
 	}
 	service := newSubscriptionService(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	service.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != "https://subscription.example/config?token=secret" {
+			t.Fatalf("unexpected upstream URL %q", request.URL.String())
+		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
@@ -35,7 +38,7 @@ func TestOutboundsHandler(t *testing.T) {
 			Request:    request,
 		}, nil
 	})
-	request := httptest.NewRequest(http.MethodGet, "/outbounds.json", nil)
+	request := newOutboundsRequest(t, "https://subscription.example/config?token=secret")
 	response := httptest.NewRecorder()
 	service.handler().ServeHTTP(response, request)
 
@@ -67,11 +70,10 @@ func TestMethodNotAllowed(t *testing.T) {
 
 func TestStaleCacheIsReturnedWhenRefreshFails(t *testing.T) {
 	cfg := config{
-		SubscriptionURL: "https://subscription.example/config/secret-token",
-		OutputPath:      "/outbounds.json",
-		FetchTimeout:    time.Second,
-		CacheTTL:        0,
-		MaxBodyBytes:    1 << 20,
+		OutputPath:   "/outbounds.json",
+		FetchTimeout: time.Second,
+		CacheTTL:     0,
+		MaxBodyBytes: 1 << 20,
 	}
 	service := newSubscriptionService(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	calls := 0
@@ -88,14 +90,14 @@ func TestStaleCacheIsReturnedWhenRefreshFails(t *testing.T) {
 		}, nil
 	})
 
-	firstRequest := httptest.NewRequest(http.MethodGet, "/outbounds.json", nil)
+	firstRequest := newOutboundsRequest(t, "https://subscription.example/config/secret-token")
 	firstResponse := httptest.NewRecorder()
 	service.handler().ServeHTTP(firstResponse, firstRequest)
 	if firstResponse.Code != http.StatusOK {
 		t.Fatalf("initial status=%d", firstResponse.Code)
 	}
 
-	secondRequest := httptest.NewRequest(http.MethodGet, "/outbounds.json", nil)
+	secondRequest := newOutboundsRequest(t, "https://subscription.example/config/secret-token")
 	secondResponse := httptest.NewRecorder()
 	service.handler().ServeHTTP(secondResponse, secondRequest)
 	if secondResponse.Code != http.StatusOK {
@@ -107,4 +109,61 @@ func TestStaleCacheIsReturnedWhenRefreshFails(t *testing.T) {
 	if secondResponse.Body.String() != firstResponse.Body.String() {
 		t.Fatal("stale response differs from cached response")
 	}
+}
+
+func TestSubscriptionURLValidation(t *testing.T) {
+	service := newSubscriptionService(config{OutputPath: "/outbounds.json"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for _, requestTarget := range []string{
+		"/outbounds.json",
+		"/outbounds.json?url=",
+		"/outbounds.json?url=ftp%3A%2F%2Fexample.com%2Fconfig",
+		"/outbounds.json?url=https%3A%2F%2Fexample.com&url=https%3A%2F%2Fexample.org",
+	} {
+		request := httptest.NewRequest(http.MethodGet, requestTarget, nil)
+		response := httptest.NewRecorder()
+		service.handler().ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("target %q returned status %d, want 400", requestTarget, response.Code)
+		}
+	}
+}
+
+func TestCacheIsSeparatedBySubscriptionURL(t *testing.T) {
+	cfg := config{
+		OutputPath:   "/outbounds.json",
+		FetchTimeout: time.Second,
+		CacheTTL:     time.Minute,
+		MaxBodyBytes: 1 << 20,
+	}
+	service := newSubscriptionService(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	calls := make(map[string]int)
+	service.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls[request.URL.String()]++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewBufferString(sampleSubscription)),
+			Request:    request,
+		}, nil
+	})
+
+	for _, subscriptionURL := range []string{
+		"https://one.example/config",
+		"https://two.example/config",
+		"https://one.example/config",
+	} {
+		response := httptest.NewRecorder()
+		service.handler().ServeHTTP(response, newOutboundsRequest(t, subscriptionURL))
+		if response.Code != http.StatusOK {
+			t.Fatalf("URL %q returned status %d", subscriptionURL, response.Code)
+		}
+	}
+	if calls["https://one.example/config"] != 1 || calls["https://two.example/config"] != 1 {
+		t.Fatalf("unexpected upstream call counts: %#v", calls)
+	}
+}
+
+func newOutboundsRequest(t *testing.T, subscriptionURL string) *http.Request {
+	t.Helper()
+	return httptest.NewRequest(http.MethodGet, "/outbounds.json?url="+url.QueryEscape(subscriptionURL), nil)
 }

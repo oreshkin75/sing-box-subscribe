@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -10,7 +9,6 @@ import (
 )
 
 type config struct {
-	SubscriptionURL  string
 	ListenAddr       string
 	OutputPath       string
 	FetchTimeout     time.Duration
@@ -22,21 +20,14 @@ type config struct {
 
 func loadConfig() (config, error) {
 	cfg := config{
-		SubscriptionURL: strings.TrimSpace(os.Getenv("SUBSCRIPTION_URL")),
-		ListenAddr:      envOrDefault("LISTEN_ADDR", ":8080"),
-		OutputPath:      envOrDefault("OUTPUT_PATH", "/outbounds.json"),
-		FetchTimeout:    15 * time.Second,
-		CacheTTL:        5 * time.Minute,
-		MaxBodyBytes:    8 << 20,
+		ListenAddr:   envOrDefault("LISTEN_ADDR", ":8080"),
+		OutputPath:   envOrDefault("OUTPUT_PATH", "/outbounds.json"),
+		FetchTimeout: 15 * time.Second,
+		CacheTTL:     5 * time.Minute,
+		MaxBodyBytes: 8 << 20,
 	}
 
-	if cfg.SubscriptionURL == "" {
-		return config{}, fmt.Errorf("SUBSCRIPTION_URL is required")
-	}
-	u, err := url.Parse(cfg.SubscriptionURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return config{}, fmt.Errorf("SUBSCRIPTION_URL must be a valid http(s) URL")
-	}
+	var err error
 	if !strings.HasPrefix(cfg.OutputPath, "/") {
 		return config{}, fmt.Errorf("OUTPUT_PATH must start with /")
 	}
