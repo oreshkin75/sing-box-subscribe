@@ -8,16 +8,24 @@ func TestAppendGeneratedOutbounds(t *testing.T) {
 		t.Fatalf("parse subscription: warnings=%v err=%v", warnings, err)
 	}
 
-	appendGeneratedOutbounds(&doc, true, true)
+	options := urlTestOptions{
+		URL:                       "https://connectivity.example/generate_204",
+		Interval:                  "45s",
+		Tolerance:                 750,
+		IdleTimeout:               "12h",
+		InterruptExistConnections: true,
+	}
+	appendGeneratedOutbounds(&doc, true, true, options, true)
 	// Seven proxies, one country group and five protocol groups for each generated type.
 	if len(doc.Outbounds) != 19 {
 		t.Fatalf("got %d outbounds, want 19", len(doc.Outbounds))
 	}
 
 	countryURLTest := outboundByTag(t, doc, "🇺🇸 US / URLTest")
-	if countryURLTest["type"] != "urltest" || countryURLTest["interval"] != "30s" ||
-		countryURLTest["tolerance"] != 500 || countryURLTest["idle_timeout"] != "24h" ||
-		countryURLTest["interrupt_exist_connections"] != false {
+	if countryURLTest["type"] != "urltest" || countryURLTest["url"] != options.URL ||
+		countryURLTest["interval"] != options.Interval || countryURLTest["tolerance"] != options.Tolerance ||
+		countryURLTest["idle_timeout"] != options.IdleTimeout ||
+		countryURLTest["interrupt_exist_connections"] != options.InterruptExistConnections {
 		t.Fatalf("unexpected country urltest: %#v", countryURLTest)
 	}
 	if outbounds := countryURLTest["outbounds"].([]string); len(outbounds) != 7 {
@@ -30,7 +38,7 @@ func TestAppendGeneratedOutbounds(t *testing.T) {
 	}
 
 	countrySelector := outboundByTag(t, doc, "🇺🇸 US / Selector")
-	if countrySelector["type"] != "selector" || countrySelector["interrupt_exist_connections"] != false {
+	if countrySelector["type"] != "selector" || countrySelector["interrupt_exist_connections"] != true {
 		t.Fatalf("unexpected country selector: %#v", countrySelector)
 	}
 	if outbounds := countrySelector["outbounds"].([]string); len(outbounds) != 7 {
@@ -56,7 +64,7 @@ func TestURLTestAndSelectorFlagsAreIndependent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			appendGeneratedOutbounds(&doc, test.urlTest, test.selector)
+			appendGeneratedOutbounds(&doc, test.urlTest, test.selector, defaultURLTestOptions(), false)
 			if got := countOutboundType(doc, "urltest"); got != test.expectedURLTests {
 				t.Fatalf("got %d urltests, want %d", got, test.expectedURLTests)
 			}
@@ -74,7 +82,7 @@ ss://YWVzLTI1Ni1nY206c2VjcmV0@example.com:8389#GB-MAN`
 	if err != nil || len(warnings) != 0 {
 		t.Fatalf("parse subscription: warnings=%v err=%v", warnings, err)
 	}
-	appendGeneratedOutbounds(&doc, true, false)
+	appendGeneratedOutbounds(&doc, true, false, defaultURLTestOptions(), false)
 
 	group := outboundByTag(t, doc, "🇬🇧 GB / URLTest")
 	if outbounds := group["outbounds"].([]string); len(outbounds) != 2 {

@@ -158,7 +158,13 @@ func (s *subscriptionService) fetchAndConvert(ctx context.Context, subscriptionU
 	if err != nil {
 		return nil, err
 	}
-	appendGeneratedOutbounds(&doc, s.config.GenerateURLTest, s.config.GenerateSelector)
+	appendGeneratedOutbounds(
+		&doc,
+		s.config.GenerateURLTest,
+		s.config.GenerateSelector,
+		s.config.URLTest,
+		s.config.SelectorInterruptExistConnections,
+	)
 	for _, warning := range warnings {
 		s.logger.Warn("skipped subscription entry", "error", warning)
 	}

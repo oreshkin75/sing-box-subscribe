@@ -7,7 +7,7 @@ type outboundGroup struct {
 	outbounds []string
 }
 
-func appendGeneratedOutbounds(doc *document, generateURLTest, generateSelector bool) {
+func appendGeneratedOutbounds(doc *document, generateURLTest, generateSelector bool, urlTest urlTestOptions, selectorInterruptExistConnections bool) {
 	if !generateURLTest && !generateSelector {
 		return
 	}
@@ -22,18 +22,18 @@ func appendGeneratedOutbounds(doc *document, generateURLTest, generateSelector b
 
 	if generateURLTest {
 		for _, group := range countryGroups {
-			doc.Outbounds = append(doc.Outbounds, newURLTest(uniqueGeneratedTag(group.name+" / URLTest", usedTags), group.outbounds))
+			doc.Outbounds = append(doc.Outbounds, newURLTest(uniqueGeneratedTag(group.name+" / URLTest", usedTags), group.outbounds, urlTest))
 		}
 		for _, group := range protocolGroups {
-			doc.Outbounds = append(doc.Outbounds, newURLTest(uniqueGeneratedTag(group.name+" / URLTest", usedTags), group.outbounds))
+			doc.Outbounds = append(doc.Outbounds, newURLTest(uniqueGeneratedTag(group.name+" / URLTest", usedTags), group.outbounds, urlTest))
 		}
 	}
 	if generateSelector {
 		for _, group := range countryGroups {
-			doc.Outbounds = append(doc.Outbounds, newSelector(uniqueGeneratedTag(group.name+" / Selector", usedTags), group.outbounds))
+			doc.Outbounds = append(doc.Outbounds, newSelector(uniqueGeneratedTag(group.name+" / Selector", usedTags), group.outbounds, selectorInterruptExistConnections))
 		}
 		for _, group := range protocolGroups {
-			doc.Outbounds = append(doc.Outbounds, newSelector(uniqueGeneratedTag(group.name+" / Selector", usedTags), group.outbounds))
+			doc.Outbounds = append(doc.Outbounds, newSelector(uniqueGeneratedTag(group.name+" / Selector", usedTags), group.outbounds, selectorInterruptExistConnections))
 		}
 	}
 }
@@ -72,24 +72,25 @@ func groupOutbounds(outbounds []map[string]any) ([]outboundGroup, []outboundGrou
 	return countries, protocols
 }
 
-func newURLTest(tag string, outbounds []string) map[string]any {
+func newURLTest(tag string, outbounds []string, options urlTestOptions) map[string]any {
 	return map[string]any{
 		"type":                        "urltest",
 		"tag":                         tag,
 		"outbounds":                   append([]string(nil), outbounds...),
-		"interval":                    "30s",
-		"tolerance":                   500,
-		"idle_timeout":                "24h",
-		"interrupt_exist_connections": false,
+		"url":                         options.URL,
+		"interval":                    options.Interval,
+		"tolerance":                   options.Tolerance,
+		"idle_timeout":                options.IdleTimeout,
+		"interrupt_exist_connections": options.InterruptExistConnections,
 	}
 }
 
-func newSelector(tag string, outbounds []string) map[string]any {
+func newSelector(tag string, outbounds []string, interruptExistConnections bool) map[string]any {
 	return map[string]any{
 		"type":                        "selector",
 		"tag":                         tag,
 		"outbounds":                   append([]string(nil), outbounds...),
-		"interrupt_exist_connections": false,
+		"interrupt_exist_connections": interruptExistConnections,
 	}
 }
 
