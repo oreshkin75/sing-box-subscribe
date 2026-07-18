@@ -75,7 +75,13 @@ Example response:
 | `CACHE_TTL` | no | `5m` | Per-subscription generated result cache duration; use `0s` to disable the fresh cache |
 | `MAX_SUBSCRIPTION_BYTES` | no | `8388608` | Maximum allowed upstream response size |
 | `GENERATE_URLTEST` | no | `false` | Generate `urltest` groups for every country and protocol |
+| `URLTEST_URL` | no | empty | Connectivity-check URL; an empty value uses the sing-box default |
+| `URLTEST_INTERVAL` | no | `30s` | URLTest interval |
+| `URLTEST_TOLERANCE` | no | `500` | URLTest tolerance in milliseconds |
+| `URLTEST_IDLE_TIMEOUT` | no | `24h` | URLTest idle timeout |
+| `URLTEST_INTERRUPT_EXIST_CONNECTIONS` | no | `false` | Interrupt existing connections when the selected outbound changes |
 | `GENERATE_SELECTOR` | no | `false` | Generate `selector` groups for every country and protocol |
+| `SELECTOR_INTERRUPT_EXIST_CONNECTIONS` | no | `false` | Interrupt existing connections when the selected selector outbound changes |
 
 A health check is available at `/healthz`. Results are cached separately for each subscription URL, with at most 128 subscriptions kept in memory. If an upstream refresh fails after a result has been cached, the service returns the stale result for that URL with an HTTP `Warning` header.
 
@@ -84,10 +90,11 @@ A health check is available at `/healthz`. Results are cached separately for eac
 
 ### Generated groups
 
-`GENERATE_URLTEST=true` adds a `urltest` for every detected country and every protocol. Each generated URLTest uses:
+`GENERATE_URLTEST=true` adds a `urltest` for every detected country and every protocol. Its settings are controlled by `URLTEST_*` variables. With their defaults, each generated URLTest uses:
 
 ```json
 {
+  "url": "",
   "interval": "30s",
   "tolerance": 500,
   "idle_timeout": "24h",
@@ -95,7 +102,9 @@ A health check is available at `/healthz`. Results are cached separately for eac
 }
 ```
 
-`GENERATE_SELECTOR=true` adds a `selector` for the same country and protocol groups. The flags are independent and can be enabled together. Outbounds without a country code are included in their protocol group but not in a country group. `UK` and `GB` are combined into `🇬🇧 GB`.
+The `URLTEST_*` variables are read and validated only when `GENERATE_URLTEST=true`. When generation is disabled, they have no effect. `URLTEST_URL` must be an absolute HTTP(S) URL when set; duration values must be positive, and tolerance must be zero or greater.
+
+`GENERATE_SELECTOR=true` adds a `selector` for the same country and protocol groups. `SELECTOR_INTERRUPT_EXIST_CONNECTIONS` controls the corresponding field in every generated selector and is read only when selector generation is enabled. The generation flags are independent and can be enabled together. Outbounds without a country code are included in their protocol group but not in a country group. `UK` and `GB` are combined into `🇬🇧 GB`.
 
 ## Docker
 
@@ -117,7 +126,13 @@ Run with both generated group types enabled:
 ```sh
 docker run --rm -p 8080:8080 \
   -e 'GENERATE_URLTEST=true' \
+  -e 'URLTEST_URL=https://www.gstatic.com/generate_204' \
+  -e 'URLTEST_INTERVAL=30s' \
+  -e 'URLTEST_TOLERANCE=500' \
+  -e 'URLTEST_IDLE_TIMEOUT=24h' \
+  -e 'URLTEST_INTERRUPT_EXIST_CONNECTIONS=false' \
   -e 'GENERATE_SELECTOR=true' \
+  -e 'SELECTOR_INTERRUPT_EXIST_CONNECTIONS=false' \
   sing-box-subscribe
 ```
 
